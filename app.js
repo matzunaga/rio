@@ -82,26 +82,31 @@
   // The whole palette follows the local clock. Colors are RGB; the page blends
   // between these moments. top and bottom are the water itself; sky is the
   // color of the sky reflected on it, strongest near the light and fading
-  // toward the bottom; glow and core are the threads, light the glow on the
-  // water, edge the tint of the vignette.
+  // toward the bottom. skyFade is the color the reflection fades out through,
+  // skyFar how strongly it veils the far water at the top, and skyReach how far
+  // it spreads around the light. glow and core are the threads, light the glow
+  // on the water, edge the tint of the vignette.
   const NIGHT = {
     top: [14, 22, 58], bottom: [24, 30, 84],
     sky: [70, 84, 170], skyAlpha: 0.25,
+    skyFade: [70, 84, 170], skyFar: 0.55, skyReach: 0.9,
     glow: [112, 134, 255], core: [206, 216, 255],
     light: [170, 190, 255], lightAlpha: 0.32,
     edge: [6, 9, 30]
   };
   const DAWN = {
-    // pale and cool: grey-green water under a thin peach and gold sky
+    // pale and cool: grey-green water under a pale gold sky, lifted around the light
     top: [150, 190, 194], bottom: [76, 136, 142],
-    sky: [252, 206, 176], skyAlpha: 0.74,
+    sky: [250, 226, 166], skyAlpha: 0.85,
+    skyFade: [242, 218, 172], skyFar: 0.22, skyReach: 0.68,
     glow: [255, 236, 214], core: [255, 252, 244],
-    light: [255, 242, 214], lightAlpha: 0.45,
+    light: [255, 246, 222], lightAlpha: 0.62,
     edge: [44, 86, 96]
   };
   const DAY = {
     top: [52, 196, 230], bottom: [0, 150, 196],
     sky: [214, 244, 255], skyAlpha: 0.2,
+    skyFade: [214, 244, 255], skyFar: 0.55, skyReach: 0.9,
     glow: [168, 244, 255], core: [255, 255, 255],
     light: [236, 252, 255], lightAlpha: 0.5,
     edge: [0, 96, 132]
@@ -110,6 +115,8 @@
     // deep and rosy: dark blue-green water under a rose sky, amber at the light
     top: [58, 74, 100], bottom: [16, 52, 64],
     sky: [214, 92, 116], skyAlpha: 0.82,
+    // fading through a deep rose-violet keeps the blend into teal from going grey
+    skyFade: [128, 54, 128], skyFar: 0.55, skyReach: 0.9,
     glow: [255, 176, 170], core: [255, 226, 214],
     light: [255, 176, 110], lightAlpha: 0.48,
     edge: [14, 22, 40]
@@ -145,6 +152,23 @@
   const beginButton = document.getElementById("begin");
   const mark = document.getElementById("mark");
   const markCard = document.getElementById("markCard");
+
+  // The glyph lives in its own file so it can be redrawn without touching the code.
+  // It is placed inside the button so its lines can follow the hour's color.
+  fetch("mark.svg", { cache: "no-cache" })
+    .then((response) => (response.ok ? response.text() : Promise.reject()))
+    .then((text) => {
+      const svg = new DOMParser().parseFromString(text, "image/svg+xml").documentElement;
+      if (svg.nodeName.toLowerCase() !== "svg") return;
+      svg.removeAttribute("width");
+      svg.removeAttribute("height");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("focusable", "false");
+      mark.replaceChildren(document.importNode(svg, true));
+    })
+    .catch(() => {
+      // no glyph file: the button keeps its label and the page carries on
+    });
 
   const view = { w: 1, h: 1, ratio: 1 };
   let threads = [];
@@ -392,18 +416,21 @@
     // strongest around the light, gone by the bottom where the water shows through
     const skyAlpha = p.skyAlpha * (0.4 + 0.6 * state.level);
     const farSky = ctx.createLinearGradient(0, 0, 0, h);
-    farSky.addColorStop(0, rgb(p.sky, skyAlpha * 0.55));
-    farSky.addColorStop(0.7, rgb(p.sky, 0));
+    farSky.addColorStop(0, rgb(p.sky, skyAlpha * p.skyFar));
+    farSky.addColorStop(0.25, rgb(p.sky, skyAlpha * p.skyFar * (0.45 / 0.7)));
+    farSky.addColorStop(0.5, rgb(p.skyFade, skyAlpha * p.skyFar * (0.2 / 0.7)));
+    farSky.addColorStop(0.7, rgb(p.skyFade, 0));
     ctx.fillStyle = farSky;
     ctx.fillRect(0, 0, w, h);
 
     ctx.save();
     ctx.translate(lightX, lightY);
     ctx.scale(1.7, 1); // the reflection spreads wider than it is tall
-    const nearSky = ctx.createRadialGradient(0, 0, 0, 0, 0, lightR * 0.9);
+    const nearSky = ctx.createRadialGradient(0, 0, 0, 0, 0, lightR * p.skyReach);
     nearSky.addColorStop(0, rgb(p.sky, skyAlpha));
     nearSky.addColorStop(0.45, rgb(p.sky, skyAlpha * 0.45));
-    nearSky.addColorStop(1, rgb(p.sky, 0));
+    nearSky.addColorStop(0.7, rgb(p.skyFade, skyAlpha * 0.45 * (0.3 / 0.55)));
+    nearSky.addColorStop(1, rgb(p.skyFade, 0));
     ctx.fillStyle = nearSky;
     ctx.fillRect(-w, -h, w * 2, h * 2);
     ctx.restore();

@@ -94,11 +94,28 @@ button:focus-visible {
   background: transparent;
   color: var(--accent);
   cursor: pointer;
-  font-family: var(--serif);
-  font-size: 22px;
   line-height: 1;
   opacity: 0.85;
   transition: opacity 0.25s ease, color 2s ease;
+}
+
+/* The glyph comes from mark.svg. Whatever drawing is in that file, its lines take
+   the hour's color at the mark's weight, with no fill. */
+
+.mark svg {
+  display: block;
+  width: auto;
+  height: 19px;
+  overflow: visible;
+}
+
+.mark svg * {
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 1.3px !important;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
 .mark:hover,
