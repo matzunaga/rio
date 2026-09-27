@@ -99,23 +99,18 @@ button:focus-visible {
   transition: opacity 0.25s ease, color 2s ease;
 }
 
-/* The glyph comes from mark.svg. Whatever drawing is in that file, its lines take
-   the hour's color at the mark's weight, with no fill. */
+/* The glyph comes from mark.svg, drawn inline so its lines take the hour's color */
 
 .mark svg {
   display: block;
-  width: auto;
-  height: 19px;
-  overflow: visible;
+  width: 22px;
+  height: 22px;
 }
 
-.mark svg * {
-  fill: none !important;
-  stroke: currentColor !important;
-  stroke-width: 1.3px !important;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
+/* a drawing has no text baseline, so the mark keeps its place at the top of the row
+   and the title stays exactly where it sat beside the old character */
+.mark {
+  align-self: flex-start;
 }
 
 .mark:hover,

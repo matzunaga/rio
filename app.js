@@ -160,8 +160,6 @@
     .then((text) => {
       const svg = new DOMParser().parseFromString(text, "image/svg+xml").documentElement;
       if (svg.nodeName.toLowerCase() !== "svg") return;
-      svg.removeAttribute("width");
-      svg.removeAttribute("height");
       svg.setAttribute("aria-hidden", "true");
       svg.setAttribute("focusable", "false");
       mark.replaceChildren(document.importNode(svg, true));
