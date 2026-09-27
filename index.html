@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#04050a" />
   <meta name="description" content="Río — a river of light and water sound, running on its own." />
   <title>Río</title>
-  <link rel="stylesheet" href="style.css?v=1" />
+  <link rel="stylesheet" href="style.css?v=2" />
 </head>
 <body>
   <main class="experience" aria-labelledby="title">
@@ -44,11 +44,50 @@
       <button class="begin" id="begin" type="button">Begin</button>
     </section>
 
-    <p class="status" id="status" role="status"></p>
+    <div class="controls" id="controls">
+      <button class="ctrl" id="pause" type="button" aria-pressed="false">Pause</button>
+
+      <span class="ctrl-divider" aria-hidden="true"></span>
+
+      <button
+        class="ctrl ctrl-info"
+        id="infoButton"
+        type="button"
+        aria-expanded="false"
+        aria-controls="infoPanel"
+        aria-label="About Río"
+      >
+        i
+      </button>
+    </div>
+
+    <aside class="info-panel" id="infoPanel" aria-label="About Río" hidden>
+      <button class="close-info" id="closeInfo" type="button" aria-label="Close information">
+        ×
+      </button>
+
+      <p>
+        <em>Río</em> is a river of light and the sound of a real stream. It runs
+        on its own for as long as you stay.
+      </p>
+
+      <p class="reading" id="reading" aria-live="polite">Listening for the river.</p>
+
+      <p>
+        The colors of the water follow the hour where you are.
+      </p>
+
+      <p class="attribution">
+        Flow data by
+        <a href="https://waterdata.usgs.gov/" target="_blank" rel="noopener noreferrer">USGS</a>.
+        Sound: "Stream" by gluckose,
+        <a href="https://freesound.org/s/333987/" target="_blank" rel="noopener noreferrer">Freesound</a>, CC0.
+      </p>
+    </aside>
   </main>
 
   <noscript>This piece needs JavaScript to let the river run.</noscript>
 
-  <script src="app.js?v=1"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>

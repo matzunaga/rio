@@ -64,6 +64,11 @@
   const DATA_TIMEOUT_MS = 20 * 1000;
   const RESTING_LINE = "River data is resting. The river continues.";
 
+  // Pausing and the controls
+  const PAUSE_FADE_SECONDS = 2; // sound fades out and the river glides to stillness
+  const RESUME_FADE_SECONDS = 3; // and both come back
+  const CONTROLS_LINGER_MS = 5000; // how long the controls stay after the last touch
+
   // Beginning
   const IDLE_LEVEL = 0.1; // how present the field is before Begin
   const IDLE_PACE = 0.35; // how fast it moves before Begin
@@ -142,6 +147,8 @@
     flowTime: 0, // accumulated, so a change of pace never jumps
     drift: 0, // how far the water has travelled downstream, accumulated for the same reason
     breath: 0, // -1 settled to +1 swelled
+    paused: false,
+    play: 1, // eases to 0 on pause and back to 1 on resume, so nothing stops or starts at once
     palette: paletteAt(localHour()),
     // live data steers these two, gently, toward their targets
     speedFactor: 1,
@@ -263,9 +270,20 @@
     return `rgba(${Math.round(c[0])}, ${Math.round(c[1])}, ${Math.round(c[2])}, ${alpha})`;
   }
 
+  // The mark takes the threads' color on dark water and leans toward the hour's
+  // deep tone on bright water, so it always reads; text shadows use that deep tone.
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+
   function refreshAccent() {
     const p = paletteAt(localHour());
-    document.documentElement.style.setProperty("--accent", rgb(p.glow));
+    const water = p.top.map((c, i) => (c + p.bottom[i]) / 2);
+    const light = (0.2126 * water[0] + 0.7152 * water[1] + 0.0722 * water[2]) / 255;
+    const bright = Math.min(1, Math.max(0, (light - 0.25) / 0.3));
+    const accent = p.glow.map((c, i) => c + (p.edge[i] - c) * bright * 0.85);
+    const root = document.documentElement.style;
+    root.setProperty("--accent", rgb(accent));
+    root.setProperty("--shade", p.edge.map(Math.round).join(", "));
+    if (themeColor) themeColor.setAttribute("content", `rgb(${p.top.map(Math.round).join(", ")})`);
   }
 
   /* Layout */
@@ -318,8 +336,18 @@
     return Math.sin(phase);
   }
 
+  // The piece's own clock. It runs with the page clock, and glides to a halt on
+  // pause; between frames (and in a hidden tab) it keeps its last rate.
+  const clock = { value: 0, base: performance.now() / 1000, rate: 1 };
+
   function clockSeconds() {
-    return performance.now() / 1000;
+    return clock.value + (performance.now() / 1000 - clock.base) * clock.rate;
+  }
+
+  function stepClock(rate) {
+    clock.value = clockSeconds();
+    clock.base = performance.now() / 1000;
+    clock.rate = rate;
   }
 
   /* Drawing */
@@ -393,14 +421,22 @@
       // along each thread, brightness rises where it passes through the light
       const nearY = (baseY - lightY) / reachY;
       const across = Math.exp(-nearY * nearY);
-      const glowStroke = ctx.createLinearGradient(0, 0, w, 0);
-      const coreStroke = ctx.createLinearGradient(0, 0, w, 0);
-      for (const x of stops) {
-        const along = (x - lightX) / reachX;
-        const lit = 1 + LIGHT_CATCH * across * Math.exp(-along * along);
-        const at = Math.min(1, Math.max(0, x / w));
-        glowStroke.addColorStop(at, rgb(p.glow, Math.min(1, GLOW_ALPHA * alpha * lit)));
-        coreStroke.addColorStop(at, rgb(p.core, Math.min(1, CORE_ALPHA * alpha * lit)));
+      let glowStroke;
+      let coreStroke;
+      if (across < 0.03) {
+        // too far from the light to catch it: a plain color is enough, and cheaper
+        glowStroke = rgb(p.glow, Math.min(1, GLOW_ALPHA * alpha));
+        coreStroke = rgb(p.core, Math.min(1, CORE_ALPHA * alpha));
+      } else {
+        glowStroke = ctx.createLinearGradient(0, 0, w, 0);
+        coreStroke = ctx.createLinearGradient(0, 0, w, 0);
+        for (const x of stops) {
+          const along = (x - lightX) / reachX;
+          const lit = 1 + LIGHT_CATCH * across * Math.exp(-along * along);
+          const at = Math.min(1, Math.max(0, x / w));
+          glowStroke.addColorStop(at, rgb(p.glow, Math.min(1, GLOW_ALPHA * alpha * lit)));
+          coreStroke.addColorStop(at, rgb(p.core, Math.min(1, CORE_ALPHA * alpha * lit)));
+        }
       }
 
       ctx.strokeStyle = glowStroke;
@@ -436,18 +472,24 @@
       state.pace = IDLE_PACE + (1 - IDLE_PACE) * e;
     }
 
-    const pace = state.pace * (reduceMotion ? REDUCED_PACE : 1);
+    // pausing glides everything to stillness rather than freezing it
+    const settle = 1 - Math.exp(-dt / (PAUSE_FADE_SECONDS / 3));
+    state.play += ((state.paused ? 0 : 1) - state.play) * settle;
+    if (state.paused && state.play < 0.01) state.play = 0; // settle fully, well below what the eye can see
+    stepClock(state.play);
+
+    const pace = state.pace * state.play * (reduceMotion ? REDUCED_PACE : 1);
     state.flowTime += dt * pace;
     state.drift += dt * pace * FLOW_SPEED * state.speedFactor;
     state.breath = breathAt(clockSeconds());
 
     // a new river reading eases in over a minute and a half, never jumps
-    const ease = 1 - Math.exp(-dt / (DATA_EASE_SECONDS / 3));
+    const ease = 1 - Math.exp((-dt * state.play) / (DATA_EASE_SECONDS / 3));
     state.speedFactor += (state.speedTarget - state.speedFactor) * ease;
     state.turbulenceFactor += (state.turbulenceTarget - state.turbulenceFactor) * ease;
 
     // the palette drifts toward the clock's colors, never jumps
-    state.palette = mixPalettes(state.palette, paletteAt(localHour()), 1 - Math.exp(-dt / 20));
+    state.palette = mixPalettes(state.palette, paletteAt(localHour()), 1 - Math.exp((-dt * state.play) / 20));
 
     draw();
     requestAnimationFrame(frame);
@@ -607,6 +649,7 @@
     startVoice(start, false);
     scheduleBreath();
     sound.timer = setInterval(scheduleBreath, 1000);
+    if (state.paused) pauseSound(); // paused while the sound was still loading
   }
 
   // iPhone can pause the sound for a call or a lock; pick it up again quietly
@@ -618,9 +661,47 @@
 
   document.addEventListener("pointerdown", wakeSound, { passive: true });
 
+  function holdGain(param, at) {
+    if (param.cancelAndHoldAtTime) {
+      param.cancelAndHoldAtTime(at);
+    } else {
+      const value = param.value;
+      param.cancelScheduledValues(at);
+      param.setValueAtTime(value, at);
+    }
+  }
+
+  let suspendTimer = 0;
+
+  function pauseSound() {
+    const { ctx, master } = sound;
+    if (!ctx || !master) return;
+    const now = ctx.currentTime;
+    holdGain(master.gain, now);
+    master.gain.linearRampToValueAtTime(0, now + PAUSE_FADE_SECONDS);
+    clearTimeout(suspendTimer);
+    // once silent, stop the audio clock too, which also saves the battery
+    suspendTimer = setTimeout(() => {
+      if (state.paused) ctx.suspend().catch(() => {});
+    }, PAUSE_FADE_SECONDS * 1000 + 150);
+  }
+
+  function resumeSound() {
+    const { ctx, master } = sound;
+    if (!ctx || !master) return;
+    clearTimeout(suspendTimer);
+    // called inside the tap, which is what lets iPhone start the sound again
+    ctx.resume().catch(() => {}).then(() => {
+      if (state.paused) return;
+      const now = ctx.currentTime;
+      holdGain(master.gain, now);
+      master.gain.linearRampToValueAtTime(SOUND_LEVEL, now + RESUME_FADE_SECONDS);
+    });
+  }
+
   /* The live river: USGS discharge over the past week, read gently */
 
-  const statusLine = document.getElementById("status");
+  const readingLine = document.getElementById("reading");
   const river = { latest: null, lastTry: 0 }; // latest: { cfs, time, low, high }
 
   function riverURL() {
@@ -640,42 +721,15 @@
     return reading && Date.now() - reading.time.getTime() < DATA_STALE_HOURS * 3600 * 1000;
   }
 
-  function formatReading(reading) {
+  function describeReading(reading) {
     const cfs = Math.round(reading.cfs).toLocaleString("en-US");
     const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(
       reading.time
     );
-    return [`${RIVER.name} · ${RIVER.place}`, `${cfs} cubic feet per second · ${time}`];
-  }
-
-  // the footer never changes in place: it fades out, takes the new words, fades back
-  let shownLine = "";
-  let swapTimer = 0;
-
-  function setLine(parts) {
-    const key = parts.join("|");
-    if (key === shownLine) return;
-    const first = shownLine === "";
-    shownLine = key;
-    clearTimeout(swapTimer);
-
-    const write = () => {
-      statusLine.replaceChildren(
-        ...parts.map((text) => {
-          const part = document.createElement("span");
-          part.textContent = text;
-          return part;
-        })
-      );
-      statusLine.classList.remove("changing");
-    };
-
-    if (first) {
-      write();
-    } else {
-      statusLine.classList.add("changing");
-      swapTimer = setTimeout(write, 1600);
-    }
+    return (
+      `Right now the ${RIVER.name} at ${RIVER.place}, carries ${cfs} cubic feet ` +
+      `per second, measured at ${time}. Its flow gently sets the pace of the water here.`
+    );
   }
 
   function showRiver() {
@@ -685,7 +739,7 @@
       // no reading, or too old to trust: the field keeps its own rhythm
       state.speedTarget = 1;
       state.turbulenceTarget = 1;
-      setLine([RESTING_LINE]);
+      readingLine.textContent = RESTING_LINE;
       return;
     }
 
@@ -696,7 +750,7 @@
     state.speedTarget = 1 + nudge;
     state.turbulenceTarget = 1 + nudge;
 
-    setLine(formatReading(reading));
+    readingLine.textContent = describeReading(reading);
   }
 
   async function loadRiver() {
@@ -760,8 +814,13 @@
     }
   }
 
+  function releaseWake() {
+    if (wakeLock) wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && state.running) {
+    if (!document.hidden && state.running && !state.paused) {
       holdWake();
       wakeSound();
     }
@@ -781,11 +840,94 @@
 
   beginButton.addEventListener("click", begin);
 
-  document.addEventListener("keydown", (event) => {
-    if (event.code === "Space" && !state.running && event.target === document.body) {
-      event.preventDefault();
-      begin();
+  /* Pause and resume */
+
+  const pauseButton = document.getElementById("pause");
+
+  function setPaused(paused) {
+    if (!state.running || state.paused === paused) return;
+    state.paused = paused;
+    pauseButton.textContent = paused ? "Resume" : "Pause";
+    pauseButton.setAttribute("aria-pressed", String(paused));
+    if (paused) {
+      pauseSound();
+      releaseWake();
+    } else {
+      resumeSound();
+      holdWake();
     }
+    showControls();
+  }
+
+  pauseButton.addEventListener("click", () => setPaused(!state.paused));
+
+  /* The controls rest out of sight and return, slowly, with a touch */
+
+  const infoButton = document.getElementById("infoButton");
+  const infoPanel = document.getElementById("infoPanel");
+  const closeInfo = document.getElementById("closeInfo");
+  let hideTimer = 0;
+
+  function showControls() {
+    if (!state.running) return;
+    document.body.classList.add("show-controls");
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hideControls, CONTROLS_LINGER_MS);
+  }
+
+  function hideControls() {
+    // they stay while paused or while a card is open
+    if (state.paused || !infoPanel.hidden || !markCard.hidden) {
+      hideTimer = setTimeout(hideControls, CONTROLS_LINGER_MS);
+      return;
+    }
+    document.body.classList.remove("show-controls");
+  }
+
+  let lastMove = 0;
+  document.addEventListener("pointerdown", showControls, { passive: true });
+  document.addEventListener(
+    "pointermove",
+    (event) => {
+      if (event.pointerType !== "mouse" || event.timeStamp - lastMove < 250) return;
+      lastMove = event.timeStamp;
+      showControls();
+    },
+    { passive: true }
+  );
+
+  function setInfo(open) {
+    infoPanel.hidden = !open;
+    infoButton.setAttribute("aria-expanded", String(open));
+    showControls();
+  }
+
+  infoButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setInfo(infoPanel.hidden);
+  });
+
+  closeInfo.addEventListener("click", () => setInfo(false));
+
+  document.addEventListener("click", (event) => {
+    if (!infoPanel.hidden && !infoPanel.contains(event.target)) setInfo(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.code === "Space" && event.target === document.body) {
+      event.preventDefault();
+      if (!state.running) begin();
+      else setPaused(!state.paused);
+      return;
+    }
+    if (event.key === "Escape") {
+      if (!infoPanel.hidden) setInfo(false);
+      if (!markCard.hidden) {
+        markCard.hidden = true;
+        mark.setAttribute("aria-expanded", "false");
+      }
+    }
+    showControls();
   });
 
   mark.addEventListener("click", (event) => {
