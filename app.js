@@ -8,13 +8,22 @@
   // The threads
   const THREAD_COUNT = 110; // on phones this is scaled down a little, see threadCount()
   const THREAD_MIN = 70;
-  const BAND_HEIGHT = 0.74; // share of the screen height the river occupies
+  const BAND_HEIGHT = 1.24; // the river is wider than the screen, so it fills the frame edge to edge
+  const BANK_FADE = 0.35; // threads at the edges keep this much less light than those in the middle
   const SEGMENT_PX = 14; // horizontal distance between points on a thread
-  const CORE_WIDTH = 0.8; // thin bright line, in CSS pixels
-  const GLOW_WIDTH = 4; // wide faint line under it
-  const CORE_ALPHA = 0.34;
-  const GLOW_ALPHA = 0.075;
-  const CORE_WHITENESS = 0.35; // how far the thin line leans from the accent toward the ink
+  const CORE_WIDTH = 0.9; // thin bright line, in CSS pixels
+  const GLOW_WIDTH = 4.5; // wide soft line under it
+  const CORE_ALPHA = 0.62;
+  const GLOW_ALPHA = 0.16;
+
+  // The one light on the water: a soft glow the threads brighten in as they pass
+  const LIGHT_X = 0.64; // across the screen, 0 left to 1 right
+  const LIGHT_Y = 0.36; // down the screen, 0 top to 1 bottom
+  const LIGHT_RADIUS = 0.55; // share of the longer screen side
+  const LIGHT_CATCH = 1.6; // how much brighter a thread gets at the heart of the light
+  const LIGHT_REACH_X = 0.3; // how far along a thread the light spreads, share of width
+  const LIGHT_REACH_Y = 0.28; // how far across the river it spreads, share of height
+  const VIGNETTE = 0.38; // how much the corners darken, in each hour's own color
 
   // The flow
   const FLOW_SPEED = 0.014; // how fast the pattern drifts downstream, left to right
@@ -63,19 +72,53 @@
   // Reduced motion slows everything further, it never removes the piece
   const REDUCED_PACE = 0.4;
 
-  // The accent follows the local clock. Hours on a 24-hour clock, colors as RGB.
+  // The whole palette follows the local clock. Colors are RGB; the page blends
+  // between these moments. top and bottom are the water, glow and core the
+  // threads, light the glow on the water, edge the tint of the vignette.
+  const NIGHT = {
+    top: [14, 22, 58], bottom: [24, 30, 84],
+    glow: [112, 134, 255], core: [206, 216, 255],
+    light: [170, 190, 255], lightAlpha: 0.32,
+    edge: [6, 9, 30]
+  };
+  const DAWN = {
+    top: [222, 146, 124], bottom: [218, 178, 108],
+    glow: [255, 226, 176], core: [255, 252, 238],
+    light: [255, 238, 200], lightAlpha: 0.5,
+    edge: [150, 84, 78]
+  };
+  const DAY = {
+    top: [52, 196, 230], bottom: [0, 150, 196],
+    glow: [168, 244, 255], core: [255, 255, 255],
+    light: [236, 252, 255], lightAlpha: 0.5,
+    edge: [0, 96, 132]
+  };
+  const DUSK = {
+    top: [226, 146, 84], bottom: [196, 98, 118],
+    glow: [255, 204, 160], core: [255, 238, 226],
+    light: [255, 214, 170], lightAlpha: 0.5,
+    edge: [104, 44, 70]
+  };
   const DAY_KEYS = [
-    { hour: 0, color: [111, 120, 230] }, // night: deep indigo
-    { hour: 4.5, color: [111, 120, 230] },
-    { hour: 6.5, color: [242, 207, 138] }, // dawn: pale gold
-    { hour: 9, color: [96, 206, 196] }, // day: clear water teal
-    { hour: 16, color: [96, 206, 196] },
-    { hour: 18.5, color: [240, 160, 140] }, // dusk: soft amber-rose
-    { hour: 21, color: [111, 120, 230] },
-    { hour: 24, color: [111, 120, 230] }
+    { hour: 0, palette: NIGHT },
+    { hour: 4.5, palette: NIGHT },
+    { hour: 6.5, palette: DAWN },
+    { hour: 9, palette: DAY },
+    { hour: 16, palette: DAY },
+    { hour: 18.5, palette: DUSK },
+    { hour: 21, palette: NIGHT },
+    { hour: 24, palette: NIGHT }
   ];
 
   /* --------------------------------------------------------------- */
+
+  // For previews only: ?hour=13 on a page address, or #dawn, #day, #dusk or #night
+  const HOUR_PREVIEW = (() => {
+    const named = { dawn: 6.5, day: 12.5, dusk: 18.5, night: 1 }[location.hash.slice(1)];
+    if (named !== undefined) return named;
+    const asked = parseFloat(new URLSearchParams(location.search).get("hour"));
+    return Number.isFinite(asked) ? asked % 24 : null;
+  })();
 
   const TAU = Math.PI * 2;
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -97,7 +140,7 @@
     flowTime: 0, // accumulated, so a change of pace never jumps
     drift: 0, // how far the water has travelled downstream, accumulated for the same reason
     breath: 0, // -1 settled to +1 swelled
-    accent: colorAt(localHour()),
+    palette: paletteAt(localHour()),
     // live data steers these two, gently, toward their targets
     speedFactor: 1,
     turbulenceFactor: 1,
@@ -185,11 +228,22 @@
   /* The local clock picks the color of the water */
 
   function localHour() {
+    if (HOUR_PREVIEW !== null) return HOUR_PREVIEW;
     const now = new Date();
     return now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
   }
 
-  function colorAt(hour) {
+  function mixPalettes(a, b, e) {
+    const out = {};
+    for (const key of Object.keys(a)) {
+      out[key] = Array.isArray(a[key])
+        ? a[key].map((c, k) => c + (b[key][k] - c) * e)
+        : a[key] + (b[key] - a[key]) * e;
+    }
+    return out;
+  }
+
+  function paletteAt(hour) {
     for (let i = 0; i < DAY_KEYS.length - 1; i += 1) {
       const a = DAY_KEYS[i];
       const b = DAY_KEYS[i + 1];
@@ -197,15 +251,19 @@
         const span = b.hour - a.hour || 1;
         const u = (hour - a.hour) / span;
         const e = u * u * (3 - 2 * u); // ease so the turn between keyframes is soft
-        return a.color.map((c, k) => c + (b.color[k] - c) * e);
+        return mixPalettes(a.palette, b.palette, e);
       }
     }
-    return DAY_KEYS[0].color.slice();
+    return mixPalettes(NIGHT, NIGHT, 0);
+  }
+
+  function rgb(c, alpha = 1) {
+    return `rgba(${Math.round(c[0])}, ${Math.round(c[1])}, ${Math.round(c[2])}, ${alpha})`;
   }
 
   function refreshAccent() {
-    const [r, g, b] = colorAt(localHour()).map(Math.round);
-    document.documentElement.style.setProperty("--accent", `rgb(${r}, ${g}, ${b})`);
+    const p = paletteAt(localHour());
+    document.documentElement.style.setProperty("--accent", rgb(p.glow));
   }
 
   /* Layout */
@@ -222,7 +280,7 @@
       const u = (i + 0.5) / count + (Math.random() - 0.5) * (0.6 / count);
       return {
         u, // position across the river, 0 at one bank and 1 at the other
-        bank: Math.pow(Math.sin(Math.PI * Math.min(1, Math.max(0, u))), 0.9), // fainter near the banks
+        bank: 1 - BANK_FADE * (1 - Math.sin(Math.PI * Math.min(1, Math.max(0, u)))), // a little fainter near the edges
         seed: Math.random() * 100
       };
     });
@@ -277,19 +335,35 @@
     const ripple = RIPPLE_AMPLITUDE * TURBULENCE * state.turbulenceFactor;
     const meander = MEANDER_AMPLITUDE * Math.max(0.6, h / 900);
 
-    const [ar, ag, ab] = state.accent;
-    const cr = Math.round(ar + (239 - ar) * CORE_WHITENESS);
-    const cg = Math.round(ag + (233 - ag) * CORE_WHITENESS);
-    const cb = Math.round(ab + (220 - ab) * CORE_WHITENESS);
-    const glowRGB = `${Math.round(ar)}, ${Math.round(ag)}, ${Math.round(ab)}`;
-    const coreRGB = `${cr}, ${cg}, ${cb}`;
+    const p = state.palette;
+    const lightX = w * LIGHT_X;
+    const lightY = h * LIGHT_Y;
+    const lightR = Math.max(w, h) * LIGHT_RADIUS;
 
+    // the water itself
     ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "#04050a";
+    const water = ctx.createLinearGradient(0, 0, 0, h);
+    water.addColorStop(0, rgb(p.top));
+    water.addColorStop(1, rgb(p.bottom));
+    ctx.fillStyle = water;
     ctx.fillRect(0, 0, w, h);
-    ctx.globalCompositeOperation = "lighter";
+
+    // the one light, resting on the water; it breathes with everything else
+    ctx.globalCompositeOperation = "screen";
+    const glow = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, lightR);
+    const lightAlpha = p.lightAlpha * (0.3 + 0.7 * state.level) * (1 + 0.1 * breath);
+    glow.addColorStop(0, rgb(p.light, lightAlpha));
+    glow.addColorStop(0.35, rgb(p.light, lightAlpha * 0.45));
+    glow.addColorStop(1, rgb(p.light, 0));
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
+
+    // threads are light on water: screen blending keeps them luminous on dark and bright alike
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+    const reachX = w * LIGHT_REACH_X;
+    const reachY = h * LIGHT_REACH_Y;
+    const stops = [-2.2, -1.4, -0.7, 0, 0.7, 1.4, 2.2].map((k) => lightX + k * reachX);
 
     const steps = Math.ceil((w + 40) / SEGMENT_PX);
     const ys = new Float32Array(steps + 1);
@@ -314,14 +388,35 @@
       ctx.moveTo(-20, ys[0]);
       for (let s = 1; s <= steps; s += 1) ctx.lineTo(-20 + s * SEGMENT_PX, ys[s]);
 
-      ctx.strokeStyle = `rgba(${glowRGB}, ${Math.min(1, GLOW_ALPHA * alpha)})`;
+      // along each thread, brightness rises where it passes through the light
+      const nearY = (baseY - lightY) / reachY;
+      const across = Math.exp(-nearY * nearY);
+      const glowStroke = ctx.createLinearGradient(0, 0, w, 0);
+      const coreStroke = ctx.createLinearGradient(0, 0, w, 0);
+      for (const x of stops) {
+        const along = (x - lightX) / reachX;
+        const lit = 1 + LIGHT_CATCH * across * Math.exp(-along * along);
+        const at = Math.min(1, Math.max(0, x / w));
+        glowStroke.addColorStop(at, rgb(p.glow, Math.min(1, GLOW_ALPHA * alpha * lit)));
+        coreStroke.addColorStop(at, rgb(p.core, Math.min(1, CORE_ALPHA * alpha * lit)));
+      }
+
+      ctx.strokeStyle = glowStroke;
       ctx.lineWidth = GLOW_WIDTH;
       ctx.stroke();
 
-      ctx.strokeStyle = `rgba(${coreRGB}, ${Math.min(1, CORE_ALPHA * alpha)})`;
+      ctx.strokeStyle = coreStroke;
       ctx.lineWidth = CORE_WIDTH;
       ctx.stroke();
     }
+
+    // a soft vignette in the hour's own deep tone, never black
+    ctx.globalCompositeOperation = "source-over";
+    const edge = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.6);
+    edge.addColorStop(0, rgb(p.edge, 0));
+    edge.addColorStop(1, rgb(p.edge, VIGNETTE));
+    ctx.fillStyle = edge;
+    ctx.fillRect(0, 0, w, h);
   }
 
   function easeInOut(u) {
@@ -349,10 +444,8 @@
     state.speedFactor += (state.speedTarget - state.speedFactor) * ease;
     state.turbulenceFactor += (state.turbulenceTarget - state.turbulenceFactor) * ease;
 
-    // the accent drifts toward the clock's color, never jumps
-    const target = colorAt(localHour());
-    const k = 1 - Math.exp(-dt / 20);
-    state.accent = state.accent.map((c, i) => c + (target[i] - c) * k);
+    // the palette drifts toward the clock's colors, never jumps
+    state.palette = mixPalettes(state.palette, paletteAt(localHour()), 1 - Math.exp(-dt / 20));
 
     draw();
     requestAnimationFrame(frame);

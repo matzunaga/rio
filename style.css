@@ -61,20 +61,6 @@ button:focus-visible {
   height: 100%;
 }
 
-/* A soft vignette, as in Tide */
-
-.vignette {
-  position: fixed;
-  z-index: -2;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse at center,
-    transparent 52%,
-    rgba(4, 5, 10, 0.55) 100%
-  );
-}
-
 /* A breath of film grain, as in Tide, Solar and Tremor */
 
 .grain {
