@@ -112,8 +112,10 @@
 
   /* --------------------------------------------------------------- */
 
-  // For previews only: ?hour=13 on a page address, or #dawn, #day, #dusk or #night
+  // For previews only: window.RIO_HOUR set before this script, ?hour=13 on a page
+  // address, or #dawn, #day, #dusk or #night
   const HOUR_PREVIEW = (() => {
+    if (Number.isFinite(window.RIO_HOUR)) return window.RIO_HOUR % 24;
     const named = { dawn: 6.5, day: 12.5, dusk: 18.5, night: 1 }[location.hash.slice(1)];
     if (named !== undefined) return named;
     const asked = parseFloat(new URLSearchParams(location.search).get("hour"));
