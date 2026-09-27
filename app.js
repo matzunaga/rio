@@ -9,6 +9,8 @@
   const THREAD_COUNT = 110; // on phones this is scaled down a little, see threadCount()
   const THREAD_MIN = 70;
   const BAND_HEIGHT = 1.24; // the river is wider than the screen, so it fills the frame edge to edge
+  const DEPTH = 0.85; // perspective: 0 spaces threads evenly, 1 packs them tightly at the far (top) edge
+  const FAR_SCALE = 0.32; // far threads are this much of the near ones' width, bend and speed
   const BANK_FADE = 0.35; // threads at the edges keep this much less light than those in the middle
   const SEGMENT_PX = 14; // horizontal distance between points on a thread
   const CORE_WIDTH = 0.9; // thin bright line, in CSS pixels
@@ -78,31 +80,39 @@
   const REDUCED_PACE = 0.4;
 
   // The whole palette follows the local clock. Colors are RGB; the page blends
-  // between these moments. top and bottom are the water, glow and core the
-  // threads, light the glow on the water, edge the tint of the vignette.
+  // between these moments. top and bottom are the water itself; sky is the
+  // color of the sky reflected on it, strongest near the light and fading
+  // toward the bottom; glow and core are the threads, light the glow on the
+  // water, edge the tint of the vignette.
   const NIGHT = {
     top: [14, 22, 58], bottom: [24, 30, 84],
+    sky: [70, 84, 170], skyAlpha: 0.25,
     glow: [112, 134, 255], core: [206, 216, 255],
     light: [170, 190, 255], lightAlpha: 0.32,
     edge: [6, 9, 30]
   };
   const DAWN = {
-    top: [222, 146, 124], bottom: [218, 178, 108],
-    glow: [255, 226, 176], core: [255, 252, 238],
-    light: [255, 238, 200], lightAlpha: 0.5,
-    edge: [150, 84, 78]
+    // pale and cool: grey-green water under a thin peach and gold sky
+    top: [150, 190, 194], bottom: [76, 136, 142],
+    sky: [252, 206, 176], skyAlpha: 0.74,
+    glow: [255, 236, 214], core: [255, 252, 244],
+    light: [255, 242, 214], lightAlpha: 0.45,
+    edge: [44, 86, 96]
   };
   const DAY = {
     top: [52, 196, 230], bottom: [0, 150, 196],
+    sky: [214, 244, 255], skyAlpha: 0.2,
     glow: [168, 244, 255], core: [255, 255, 255],
     light: [236, 252, 255], lightAlpha: 0.5,
     edge: [0, 96, 132]
   };
   const DUSK = {
-    top: [226, 146, 84], bottom: [196, 98, 118],
-    glow: [255, 204, 160], core: [255, 238, 226],
-    light: [255, 214, 170], lightAlpha: 0.5,
-    edge: [104, 44, 70]
+    // deep and rosy: dark blue-green water under a rose sky, amber at the light
+    top: [58, 74, 100], bottom: [16, 52, 64],
+    sky: [214, 92, 116], skyAlpha: 0.82,
+    glow: [255, 176, 170], core: [255, 226, 214],
+    light: [255, 176, 110], lightAlpha: 0.48,
+    edge: [14, 22, 40]
   };
   const DAY_KEYS = [
     { hour: 0, palette: NIGHT },
@@ -359,7 +369,7 @@
     const presence = state.level * (1 + BREATH_BRIGHTNESS * breath);
     const amplitude = 1 + BREATH_AMPLITUDE * breath;
     const band = h * BAND_HEIGHT * (1 + BREATH_SPACING * breath);
-    const top = (h - band) / 2;
+    const top = -h * 0.04; // the far water starts just above the screen, so its dense threads show
     const scale = Math.max(w, h) / 1000; // noise coordinates stay the same at any size
     const drift = state.drift;
     const ripple = RIPPLE_AMPLITUDE * TURBULENCE * state.turbulenceFactor;
@@ -377,6 +387,26 @@
     water.addColorStop(1, rgb(p.bottom));
     ctx.fillStyle = water;
     ctx.fillRect(0, 0, w, h);
+
+    // the sky reflected on the water: broad across the far water at the top,
+    // strongest around the light, gone by the bottom where the water shows through
+    const skyAlpha = p.skyAlpha * (0.4 + 0.6 * state.level);
+    const farSky = ctx.createLinearGradient(0, 0, 0, h);
+    farSky.addColorStop(0, rgb(p.sky, skyAlpha * 0.55));
+    farSky.addColorStop(0.7, rgb(p.sky, 0));
+    ctx.fillStyle = farSky;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.translate(lightX, lightY);
+    ctx.scale(1.7, 1); // the reflection spreads wider than it is tall
+    const nearSky = ctx.createRadialGradient(0, 0, 0, 0, 0, lightR * 0.9);
+    nearSky.addColorStop(0, rgb(p.sky, skyAlpha));
+    nearSky.addColorStop(0.45, rgb(p.sky, skyAlpha * 0.45));
+    nearSky.addColorStop(1, rgb(p.sky, 0));
+    ctx.fillStyle = nearSky;
+    ctx.fillRect(-w, -h, w * 2, h * 2);
+    ctx.restore();
 
     // the one light, resting on the water; it breathes with everything else
     ctx.globalCompositeOperation = "screen";
@@ -399,19 +429,25 @@
     const ys = new Float32Array(steps + 1);
 
     for (const thread of threads) {
-      const baseY = top + thread.u * band;
-      const ny = baseY / (1000 * scale);
+      // depth: u runs from the far water at the top to the near water at the bottom.
+      // Far threads sit closer together, finer, flatter and slower.
+      const u = thread.u;
+      const baseY = top + band * (u * (1 - DEPTH) + u * u * DEPTH);
+      const near = FAR_SCALE + (1 - FAR_SCALE) * Math.min(1, Math.max(0, u));
+      const ny = u * 1.4; // the water's own coordinates, so the pattern is squeezed with the distance
+      const along = 1 + (1 - near) * 1.4; // far waves look shorter
+      const flow = drift * (0.5 + 0.5 * near);
       // each thread brightens and fades on its own slow schedule
       const shimmer = 0.55 + 0.45 * noise3(thread.seed, t * 0.05, 5.1);
-      const alpha = presence * thread.bank * shimmer;
+      const alpha = presence * thread.bank * shimmer * (0.7 + 0.3 * near);
       if (alpha < 0.004) continue;
 
       for (let s = 0; s <= steps; s += 1) {
         const x = -20 + s * SEGMENT_PX;
-        const nx = x / (1000 * scale);
-        const big = noise3(nx * 1.1 - drift * 0.6, ny * 1.5, t * EVOLVE_SPEED);
-        const fine = noise3(nx * 3.4 - drift, ny * 3.2 + 7.3, t * EVOLVE_SPEED * 2.4 + thread.seed * 0.02);
-        ys[s] = baseY + (big * meander + fine * ripple) * amplitude;
+        const nx = (x / (1000 * scale)) * along;
+        const big = noise3(nx * 1.1 - flow * 0.6, ny * 1.5, t * EVOLVE_SPEED);
+        const fine = noise3(nx * 3.4 - flow, ny * 3.2 + 7.3, t * EVOLVE_SPEED * 2.4 + thread.seed * 0.02);
+        ys[s] = baseY + (big * meander + fine * ripple) * amplitude * near;
       }
 
       ctx.beginPath();
@@ -440,11 +476,11 @@
       }
 
       ctx.strokeStyle = glowStroke;
-      ctx.lineWidth = GLOW_WIDTH;
+      ctx.lineWidth = GLOW_WIDTH * near;
       ctx.stroke();
 
       ctx.strokeStyle = coreStroke;
-      ctx.lineWidth = CORE_WIDTH;
+      ctx.lineWidth = CORE_WIDTH * (0.55 + 0.45 * near);
       ctx.stroke();
     }
 
